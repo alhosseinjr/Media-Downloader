@@ -19,7 +19,7 @@ DOWNLOAD_DIR.mkdir(exist_ok=True)
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
+    level=logging.DEBUG
 )
 logger = logging.getLogger(__name__)
 
@@ -38,10 +38,11 @@ def get_ydl_opts(quality: str, output_path: str) -> dict:
     opts = {
         "format": format_map.get(quality, format_map["best"]),
         "outtmpl": output_path,
-        "quiet": True,
-        "no_warnings": True,
+        "quiet": False,
+        "no_warnings": False,
         "merge_output_format": "mp4",
         "postprocessors": [],
+        "socket_timeout": 30,
     }
     if quality == "audio":
         opts["postprocessors"] = [{
@@ -51,14 +52,29 @@ def get_ydl_opts(quality: str, output_path: str) -> dict:
         }]
     return opts
 
-async def fetch_info(url: str):
-    ydl_opts = {"quiet": True, "no_warnings": True, "skip_download": True}
+def fetch_info_sync(url: str):
+    """Synchronous fetch - runs in executor"""
+    ydl_opts = {
+        "quiet": False,
+        "no_warnings": False,
+        "skip_download": True,
+        "socket_timeout": 30,
+        "extractor_args": {},
+    }
+    logger.info(f"Fetching info for URL: {url}")
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            return ydl.extract_info(url, download=False)
+            info = ydl.extract_info(url, download=False)
+            logger.info(f"Successfully fetched: {info.get('title', 'No title')}")
+            return info, None
+    except yt_dlp.utils.DownloadError as e:
+        logger.error(f"yt-dlp DownloadError: {e}")
+        return None, str(e)
     except Exception as e:
-        logger.error(f"fetch_info error: {e}")
-        return None
+        logger.error(f"Unexpected error: {type(e).__name__}: {e}")
+        return None, str(e)
+
+# ===================== HANDLERS =====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
@@ -77,8 +93,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Send any video URL directly\n"
         "• Choose your preferred quality\n"
         "• Wait a moment and receive your file!\n\n"
-        "⚠️ *Note:* Videos larger than 50MB cannot be sent via Telegram.\n"
-        "In that case, try a lower quality."
+        "⚠️ *Note:* Videos larger than 50MB cannot be sent via Telegram."
     )
     await update.message.reply_text(text, parse_mode="Markdown")
 
@@ -93,16 +108,25 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     msg = await update.message.reply_text("⏳ Fetching video info...")
-    info = await asyncio.get_event_loop().run_in_executor(None, lambda: fetch_info(url))
+
+    loop = asyncio.get_event_loop()
+    info, error = await loop.run_in_executor(None, fetch_info_sync, url)
 
     if not info:
-        await msg.edit_text("❌ Couldn't retrieve this video.\nPlease check the link and try again.")
+        error_msg = error or "Unknown error"
+        logger.error(f"Failed to fetch info: {error_msg}")
+        await msg.edit_text(
+            f"❌ *Couldn't retrieve this video.*\n\n"
+            f"Reason: `{error_msg[:200]}`\n\n"
+            f"Please check the link and try again.",
+            parse_mode="Markdown"
+        )
         return
 
     title = info.get("title", "Video")[:60]
     duration = info.get("duration", 0)
-    uploader = info.get("uploader", "Unknown")
-    duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else "Unknown"
+    uploader = info.get("uploader") or info.get("channel") or "Unknown"
+    duration_str = f"{int(duration) // 60}:{int(duration) % 60:02d}" if duration else "Unknown"
 
     context.user_data["pending_url"] = url
     context.user_data["video_title"] = title
@@ -150,30 +174,36 @@ async def handle_quality_choice(update: Update, context: ContextTypes.DEFAULT_TY
         parse_mode="Markdown"
     )
 
-    safe_title = re.sub(r'[^\w\s-]', '', title)[:40].strip()
+    safe_title = re.sub(r'[^\w\s-]', '', title)[:40].strip() or "video"
     output_path = str(DOWNLOAD_DIR / f"{safe_title}.%(ext)s")
 
+    def do_download():
+        logger.info(f"Starting download: {url} quality={quality}")
+        with yt_dlp.YoutubeDL(get_ydl_opts(quality, output_path)) as ydl:
+            ydl.download([url])
+        logger.info("Download complete")
+
     try:
-        def do_download():
-            with yt_dlp.YoutubeDL(get_ydl_opts(quality, output_path)) as ydl:
-                ydl.download([url])
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, do_download)
 
-        await asyncio.get_event_loop().run_in_executor(None, do_download)
-
-        files = list(DOWNLOAD_DIR.glob(f"{safe_title}.*"))
+        # Find downloaded file
+        files = sorted(DOWNLOAD_DIR.glob(f"{safe_title}.*"), key=lambda f: f.stat().st_mtime, reverse=True)
         if not files:
             files = sorted(DOWNLOAD_DIR.iterdir(), key=lambda f: f.stat().st_mtime, reverse=True)
 
         if not files:
-            await query.edit_message_text("❌ Download failed. Please try again.")
+            await query.edit_message_text("❌ Download failed - file not found. Please try again.")
             return
 
         file_path = files[0]
         file_size_mb = file_path.stat().st_size / (1024 * 1024)
+        logger.info(f"File ready: {file_path} ({file_size_mb:.1f}MB)")
 
         if file_size_mb > 50:
             await query.edit_message_text(
-                f"⚠️ File too large ({file_size_mb:.1f}MB). Telegram limit is 50MB.\nTry a lower quality."
+                f"⚠️ File too large ({file_size_mb:.1f}MB).\n"
+                "Telegram limit is 50MB. Please try a lower quality."
             )
             file_path.unlink(missing_ok=True)
             return
@@ -182,32 +212,38 @@ async def handle_quality_choice(update: Update, context: ContextTypes.DEFAULT_TY
 
         with open(file_path, "rb") as f:
             if quality == "audio":
-                await query.message.reply_audio(audio=f, title=title[:64], caption="🎵 Downloaded successfully!")
+                await query.message.reply_audio(
+                    audio=f,
+                    title=title[:64],
+                    caption="🎵 Downloaded successfully!"
+                )
             else:
                 await query.message.reply_video(
                     video=f,
                     caption=f"🎬 *{title[:200]}*\n\n✅ Downloaded successfully!",
                     parse_mode="Markdown",
-                    supports_streaming=True
+                    supports_streaming=True,
+                    read_timeout=120,
+                    write_timeout=120,
                 )
 
         file_path.unlink(missing_ok=True)
         await query.edit_message_text("✅ *Done! Enjoy* 🎉", parse_mode="Markdown")
 
     except Exception as e:
-        logger.error(f"Download error: {e}")
+        logger.error(f"Download/send error: {type(e).__name__}: {e}")
         await query.edit_message_text(
-            "❌ *Download failed!*\n\nPossible reasons:\n"
-            "• Video is private or protected\n"
-            "• Link has expired\n"
-            "• Platform not supported\n\nPlease try another link.",
+            f"❌ *Failed!*\n\n`{str(e)[:200]}`\n\nPlease try another link.",
             parse_mode="Markdown"
         )
 
 async def handle_non_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📎 Please send a video URL!\nExample: https://youtube.com/watch?v=...")
+    await update.message.reply_text(
+        "📎 Please send a video URL!\nExample: https://youtube.com/watch?v=..."
+    )
 
 def main():
+    logger.info("Starting bot...")
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
