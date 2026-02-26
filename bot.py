@@ -1,34 +1,35 @@
+# Updated bot.py
+
+# Import statements
 import os
 import re
-import logging
+import requests
+from dotenv import load_dotenv
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
+# Load environment variables from .env file
+load_dotenv()
 
-# Load environment variables
-API_TOKEN = os.getenv('API_TOKEN')
+# Constants
+API_KEY = os.getenv('API_KEY')
 
-# Validate the API token
-if not API_TOKEN:
-    logging.error('API token is not set or invalid.')
-    raise ValueError('API token is required.')
+# Function to validate tokens
+def validate_token(token):
+    if len(token) != 32 or not re.match("^[a-fA-F0-9]*$, token):
+        raise ValueError("Invalid token")
 
-def is_valid_url(url):
-    # Improved URL validation using regex
-    pattern = re.compile('^(http://|https://).*')
-    return re.match(pattern, url) is not None
+# Example function that uses the API key
 
-def download_media(url):
-    # Check URL validity
-    if not is_valid_url(url):
-        logging.error('Provided URL is invalid.'); return
-    try:
-        # Logic for downloading the media goes here...
-        logging.info(f'Downloading media from {url}')
-        # Simulated download...
-    except Exception as e:
-        logging.error(f'Error downloading media: {e}')
+def fetch_data(endpoint):
+    validate_token(API_KEY)
+    response = requests.get(endpoint, headers={'Authorization': f'Bearer {API_KEY}'})
+    if response.status_code != 200:
+        raise Exception('Failed to fetch data')
+    return response.json()
 
+# Example of usage
 if __name__ == '__main__':
-    media_url = input('Enter the media URL: ')
-    download_media(media_url)
+    try:
+        data = fetch_data('https://api.example.com/data')
+        print(data)
+    except Exception as e:
+        print(f'Error: {e}')
