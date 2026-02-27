@@ -17,6 +17,9 @@ import yt_dlp
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8715935868:AAGQdTaUjubzKktepbyd6rpRMLfq4nCxAlM")
 
+# مسار الكوكيز على Railway
+COOKIES_FILE = "/app/cookies.txt"
+
 DOWNLOAD_DIR = Path(tempfile.gettempdir()) / "videobot_downloads"
 DOWNLOAD_DIR.mkdir(exist_ok=True)
 
@@ -49,6 +52,7 @@ def get_ydl_opts(quality: str, output_path: str) -> dict:
         "merge_output_format": "mp4",
         "quiet": True,
         "socket_timeout": 30,
+        "cookies": COOKIES_FILE,  # 🔥 دعم الكوكيز
     }
 
     if quality == "audio":
@@ -63,19 +67,29 @@ def get_ydl_opts(quality: str, output_path: str) -> dict:
 # ===================== SYNC FUNCTIONS =====================
 
 def _fetch_info_sync(url: str):
-    """Synchronous version ONLY (no async anywhere)"""
     try:
-        with yt_dlp.YoutubeDL({"quiet": True, "skip_download": True}) as ydl:
+        ydl_opts = {
+            "quiet": True,
+            "skip_download": True,
+            "cookies": COOKIES_FILE,  # 🔥 هنا الكوكيز
+        }
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             return info, None
+
     except Exception as e:
         return None, str(e)
 
 def _download_sync(url: str, quality: str, output_path: str):
     try:
-        with yt_dlp.YoutubeDL(get_ydl_opts(quality, output_path)) as ydl:
+        opts = get_ydl_opts(quality, output_path)
+
+        with yt_dlp.YoutubeDL(opts) as ydl:
             ydl.download([url])
+
         return True, None
+
     except Exception as e:
         return False, str(e)
 
@@ -104,14 +118,12 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     loop = asyncio.get_running_loop()
 
-    # 🔥 هنا الإصلاح النهائي: استخدام النسخة الـ sync فقط
     info, error = await loop.run_in_executor(executor, _fetch_info_sync, url)
 
     if info is None:
         await msg.edit_text(f"❌ Error:\n{error}")
         return
 
-    # هنا info أصبح dict حقيقي
     title = str(info.get("title", "Video"))[:60]
     uploader = str(info.get("uploader") or info.get("channel") or "Unknown")
 
