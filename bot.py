@@ -15,7 +15,7 @@ import yt_dlp
 
 # ===================== SETTINGS =====================
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8715935868:AAGQdTaUjubzKktepbyd6rpRMLfq4nCxAlM")
 
 DOWNLOAD_DIR = Path(tempfile.gettempdir()) / "videobot_downloads"
 DOWNLOAD_DIR.mkdir(exist_ok=True)
