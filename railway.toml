@@ -1,8 +1,8 @@
 [build]
 builder = "NIXPACKS"
-packages = ["ffmpeg"]
+
+[phases.setup]
+nixPkgs = ["ffmpeg"]
 
 [deploy]
 startCommand = "python bot.py"
-restartPolicyType = "ON_FAILURE"
-restartPolicyMaxRetries = 10
