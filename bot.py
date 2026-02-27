@@ -62,7 +62,8 @@ def get_ydl_opts(quality: str, output_path: str) -> dict:
 
 # ===================== SYNC FUNCTIONS =====================
 
-def _fetch_info(url: str):
+def _fetch_info_sync(url: str):
+    """Synchronous version ONLY (no async anywhere)"""
     try:
         with yt_dlp.YoutubeDL({"quiet": True, "skip_download": True}) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -70,7 +71,7 @@ def _fetch_info(url: str):
     except Exception as e:
         return None, str(e)
 
-def _download(url: str, quality: str, output_path: str):
+def _download_sync(url: str, quality: str, output_path: str):
     try:
         with yt_dlp.YoutubeDL(get_ydl_opts(quality, output_path)) as ydl:
             ydl.download([url])
@@ -99,17 +100,18 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Send valid URL")
         return
 
-    msg = await update.message.reply_text("⏳ Fetching...")
+    msg = await update.message.reply_text("⏳ Fetching video info...")
 
     loop = asyncio.get_running_loop()
 
-    # 🔥 FIX: use _fetch_info (NOT fetch_info)
-    info, error = await loop.run_in_executor(executor, _fetch_info, url)
+    # 🔥 هنا الإصلاح النهائي: استخدام النسخة الـ sync فقط
+    info, error = await loop.run_in_executor(executor, _fetch_info_sync, url)
 
     if info is None:
         await msg.edit_text(f"❌ Error:\n{error}")
         return
 
+    # هنا info أصبح dict حقيقي
     title = str(info.get("title", "Video"))[:60]
     uploader = str(info.get("uploader") or info.get("channel") or "Unknown")
 
@@ -163,7 +165,7 @@ async def handle_quality(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     loop = asyncio.get_running_loop()
     success, error = await loop.run_in_executor(
-        executor, _download, url, quality, output_path
+        executor, _download_sync, url, quality, output_path
     )
 
     if not success:
