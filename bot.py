@@ -40,10 +40,10 @@ def is_url(text: str) -> bool:
 
 def get_ydl_opts(quality: str, output_path: str) -> dict:
     format_map = {
-        "best":  "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-        "720p":  "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]/best",
-        "480p":  "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480]/best",
-        "audio": "bestaudio[ext=m4a]/bestaudio",
+        "best":  "bestvideo+bestaudio/best",
+        "720p":  "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
+        "480p":  "bestvideo[height<=480]+bestaudio/best[height<=480]/best",
+        "audio": "bestaudio/best",
     }
     opts = {
         "format": format_map.get(quality, format_map["best"]),
