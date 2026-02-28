@@ -19,7 +19,6 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "8715935868:AAGQdTaUjubzKktepbyd6rpRMLfq4nCxA
 DOWNLOAD_DIR = Path(tempfile.gettempdir()) / "videobot_downloads"
 DOWNLOAD_DIR.mkdir(exist_ok=True)
 
-# Cookies file - place cookies.txt in same folder as bot.py
 COOKIES_FILE = Path("/app/cookies.txt")
 COOKIES_PATH = str(COOKIES_FILE) if COOKIES_FILE.exists() else None
 
@@ -36,34 +35,43 @@ URL_PATTERN = re.compile(r'https?://[^\s]+')
 def is_url(text: str) -> bool:
     return bool(URL_PATTERN.match(text.strip()))
 
-# ===================== YT-DLP =====================
+# ===================== YT-DLP OPTIONS =====================
 
-def get_ydl_opts(quality: str, output_path: str) -> dict:
-    format_map = {
-        "best":  "bestvideo+bestaudio/best",
-        "720p":  "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
-        "480p":  "bestvideo[height<=480]+bestaudio/best[height<=480]/best",
-        "audio": "bestaudio/best",
-    }
+def get_video_opts(output_path: str) -> dict:
+    """
+    Download best single-file video (no merge needed).
+    Picks the best pre-muxed format that already has video+audio together.
+    """
     opts = {
-        "format": format_map.get(quality, format_map["best"]),
+        # best single file that already contains video+audio — no ffmpeg needed
+        "format": "best[ext=mp4]/best",
         "outtmpl": output_path,
         "quiet": False,
         "no_warnings": False,
         "socket_timeout": 30,
-        # No merge needed - avoid ffmpeg dependency for single-format downloads
-        "merge_output_format": "mp4",
+        "noplaylist": True,
     }
     if COOKIES_PATH:
         opts["cookiefile"] = COOKIES_PATH
+    return opts
 
-    if quality == "audio":
-        opts["postprocessors"] = [{
+def get_audio_opts(output_path: str) -> dict:
+    """Download best audio and convert to mp3 using ffmpeg."""
+    opts = {
+        "format": "bestaudio/best",
+        "outtmpl": output_path,
+        "quiet": False,
+        "no_warnings": False,
+        "socket_timeout": 30,
+        "noplaylist": True,
+        "postprocessors": [{
             "key": "FFmpegExtractAudio",
             "preferredcodec": "mp3",
             "preferredquality": "192",
-        }]
-
+        }],
+    }
+    if COOKIES_PATH:
+        opts["cookiefile"] = COOKIES_PATH
     return opts
 
 def get_info_opts() -> dict:
@@ -71,6 +79,7 @@ def get_info_opts() -> dict:
         "quiet": False,
         "skip_download": True,
         "socket_timeout": 30,
+        "noplaylist": True,
     }
     if COOKIES_PATH:
         opts["cookiefile"] = COOKIES_PATH
@@ -89,15 +98,26 @@ def _fetch_info(url: str):
         logger.error(f"Fetch error: {e}")
         return None, str(e)
 
-def _download(url: str, quality: str, output_path: str):
-    logger.info(f"Downloading quality={quality}")
+def _download_video(url: str, output_path: str):
+    logger.info("Downloading video...")
     try:
-        with yt_dlp.YoutubeDL(get_ydl_opts(quality, output_path)) as ydl:
+        with yt_dlp.YoutubeDL(get_video_opts(output_path)) as ydl:
             ydl.download([url])
-        logger.info("Download done")
+        logger.info("Video download done")
         return True, None
     except Exception as e:
-        logger.error(f"Download error: {e}")
+        logger.error(f"Video download error: {e}")
+        return False, str(e)
+
+def _download_audio(url: str, output_path: str):
+    logger.info("Downloading audio...")
+    try:
+        with yt_dlp.YoutubeDL(get_audio_opts(output_path)) as ydl:
+            ydl.download([url])
+        logger.info("Audio download done")
+        return True, None
+    except Exception as e:
+        logger.error(f"Audio download error: {e}")
         return False, str(e)
 
 # ===================== HANDLERS =====================
@@ -106,9 +126,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 *Welcome to Video Downloader Bot!*\n\n"
         "Send me any video link from:\n"
-        "▶️ YouTube | 🎵 TikTok | 📘 Facebook\n"
-        "📸 Instagram | 🐦 Twitter/X | and more!\n\n"
-        "I'll download it in high quality 🚀",
+        "▶️ Facebook | 📸 Instagram | 🐦 Twitter/X\n"
+        "🎵 TikTok | and more!\n\n"
+        "I'll download it for you 🚀",
         parse_mode="Markdown"
     )
 
@@ -116,7 +136,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📖 *Help*\n\n"
         "• Send any video URL\n"
-        "• Choose quality\n"
+        "• Choose Video or Audio\n"
         "• Receive your file!\n\n"
         "⚠️ Max file size: 50MB",
         parse_mode="Markdown"
@@ -151,14 +171,10 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = [
         [
-            InlineKeyboardButton("🎬 Best Quality", callback_data="q_best"),
-            InlineKeyboardButton("📺 720p", callback_data="q_720p"),
+            InlineKeyboardButton("🎬 Video", callback_data="dl_video"),
+            InlineKeyboardButton("🎵 Audio MP3", callback_data="dl_audio"),
         ],
-        [
-            InlineKeyboardButton("📱 480p", callback_data="q_480p"),
-            InlineKeyboardButton("🎵 Audio MP3", callback_data="q_audio"),
-        ],
-        [InlineKeyboardButton("❌ Cancel", callback_data="q_cancel")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="dl_cancel")],
     ]
 
     await msg.edit_text(
@@ -166,20 +182,20 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📝 *Title:* {title}\n"
         f"👤 *Channel:* {uploader}\n"
         f"⏱ *Duration:* {duration_str}\n\n"
-        "Choose quality:",
+        "Choose format:",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-async def handle_quality(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    if query.data == "q_cancel":
+    if query.data == "dl_cancel":
         await query.edit_message_text("❌ Cancelled.")
         return
 
-    quality = query.data.replace("q_", "")
+    choice = query.data  # dl_video or dl_audio
     url = context.user_data.get("url")
     title = context.user_data.get("title", "video")
 
@@ -187,17 +203,17 @@ async def handle_quality(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ Session expired. Send the link again.")
         return
 
-    labels = {"best": "Best Quality", "720p": "720p", "480p": "480p", "audio": "Audio MP3"}
-    await query.edit_message_text(
-        f"⬇️ *Downloading {labels.get(quality)}...*\n⏳ Please wait...",
-        parse_mode="Markdown"
-    )
+    await query.edit_message_text("⬇️ *Downloading...*\n⏳ Please wait...", parse_mode="Markdown")
 
     safe = re.sub(r'[^\w\s-]', '', title)[:40].strip() or "video"
     output_path = str(DOWNLOAD_DIR / f"{safe}.%(ext)s")
 
     loop = asyncio.get_running_loop()
-    success, dl_error = await loop.run_in_executor(executor, _download, url, quality, output_path)
+
+    if choice == "dl_video":
+        success, dl_error = await loop.run_in_executor(executor, _download_video, url, output_path)
+    else:
+        success, dl_error = await loop.run_in_executor(executor, _download_audio, url, output_path)
 
     if not success:
         await query.edit_message_text(
@@ -206,6 +222,7 @@ async def handle_quality(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # Find the downloaded file
     files = sorted(DOWNLOAD_DIR.glob(f"{safe}.*"), key=lambda f: f.stat().st_mtime, reverse=True)
     if not files:
         files = sorted(DOWNLOAD_DIR.iterdir(), key=lambda f: f.stat().st_mtime, reverse=True)
@@ -221,7 +238,7 @@ async def handle_quality(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if size_mb > 50:
         file_path.unlink(missing_ok=True)
         await query.edit_message_text(
-            f"⚠️ File too large ({size_mb:.1f}MB).\nTelegram limit is 50MB. Try lower quality."
+            f"⚠️ File too large ({size_mb:.1f}MB).\nTelegram limit is 50MB."
         )
         return
 
@@ -229,11 +246,13 @@ async def handle_quality(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         with open(file_path, "rb") as f:
-            if quality == "audio":
+            if choice == "dl_audio":
                 await query.message.reply_audio(
                     audio=f,
                     title=title[:64],
-                    caption="🎵 Done!"
+                    caption="🎵 Done!",
+                    read_timeout=120,
+                    write_timeout=120,
                 )
             else:
                 await query.message.reply_video(
@@ -243,6 +262,7 @@ async def handle_quality(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     read_timeout=120,
                     write_timeout=120,
                 )
+
         file_path.unlink(missing_ok=True)
         await query.edit_message_text("✅ *Enjoy!* 🎉", parse_mode="Markdown")
 
@@ -254,7 +274,7 @@ async def handle_quality(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 async def handle_other(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📎 Send a video URL!\nExample: https://youtube.com/watch?v=...")
+    await update.message.reply_text("📎 Send a video URL!\nExample: https://facebook.com/...")
 
 def main():
     logger.info("Bot starting...")
@@ -263,7 +283,7 @@ def main():
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'https?://'), handle_url))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_other))
-    app.add_handler(CallbackQueryHandler(handle_quality, pattern=r'^q_'))
+    app.add_handler(CallbackQueryHandler(handle_choice, pattern=r'^dl_'))
     logger.info("🤖 Bot running!")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
