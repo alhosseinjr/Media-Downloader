@@ -14,7 +14,7 @@ from telegram.ext import (
 import yt_dlp
 
 # ===================== SETTINGS =====================
-BOT_TOKEN = os.getenv("BOT_TOKEN", "*REMOVED**")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 
 DOWNLOAD_DIR = Path(tempfile.gettempdir()) / "videobot_downloads"
 DOWNLOAD_DIR.mkdir(exist_ok=True)
